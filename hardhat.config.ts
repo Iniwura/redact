@@ -6,6 +6,7 @@ import "@typechain/hardhat";
 import "hardhat-deploy";
 import "hardhat-gas-reporter";
 import { HardhatUserConfig, vars } from "hardhat/config";
+import "./tasks/updateModel";
 
 // Secrets live in Hardhat's vars store.
 // Set with: npx hardhat vars set MNEMONIC / ALCHEMY_API_KEY / ETHERSCAN_API_KEY
