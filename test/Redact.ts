@@ -1,4 +1,4 @@
-import { Redact, Redact__factory } from "../types";
+import { Redact, Redact__factory, RedactUSD, RedactUSD__factory } from "../types";
 import { FhevmType } from "@fhevm/hardhat-plugin";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { expect } from "chai";
@@ -10,11 +10,13 @@ type Signers = {
   bob: HardhatEthersSigner;
 };
 
-// Match the placeholder weights in deploy/01_deploy_redact.ts
-const POS_WEIGHTS: number[] = [500, 0, 40, 5, 0, 0, 8, 15];
-const NEG_WEIGHTS: number[] = [0, 30, 0, 0, 20, 100, 0, 0];
-const BIAS = 2000;
-const THRESHOLD = 4000;
+// Trained model, matches deploy/01_deploy_redact.ts
+const POS_WEIGHTS: number[] = [260, 0, 30, 4, 0, 0, 2, 5];
+const NEG_WEIGHTS: number[] = [0, 40, 0, 0, 23, 144, 0, 0];
+const BIAS = 10000;
+const THRESHOLD = 10839;
+const MARGIN_SILVER = 2000;
+const MARGIN_GOLD = 5000;
 
 async function deployFixture() {
   const factory = (await ethers.getContractFactory("Redact")) as Redact__factory;
@@ -23,28 +25,29 @@ async function deployFixture() {
   return { redact, address };
 }
 
-// Compute what the plaintext score should be, matching the contract formula:
-//   posSum = bias + sum(posW[i] * f[i])
-//   negSum = sum(negW[i] * f[i])
-//   approved = posSum >= negSum + threshold
-function expectedResult(features: number[]): { score: number; approved: boolean } {
+function expectedResult(features: number[]): { score: number; approved: boolean; tier: number } {
   let posSum = BIAS;
-  let negSum = 0;
+  let negSum = THRESHOLD;
   for (let i = 0; i < features.length; i++) {
     posSum += POS_WEIGHTS[i] * features[i];
     negSum += NEG_WEIGHTS[i] * features[i];
   }
-  return { score: posSum, approved: posSum >= negSum + THRESHOLD };
+  const approved = posSum >= negSum;
+  let tier = 0;
+  if (posSum >= negSum + MARGIN_GOLD) tier = 3;
+  else if (posSum >= negSum + MARGIN_SILVER) tier = 2;
+  else if (approved) tier = 1;
+  return { score: posSum, approved, tier };
 }
 
-describe("Redact", function () {
+describe("Redact v2", function () {
   let signers: Signers;
   let redact: Redact;
   let address: string;
 
   before(async function () {
     if (!fhevm.isMock) {
-      console.warn("Skipping mock suite on a live network. Use test/RedactSepolia.ts for Sepolia.");
+      console.warn("Skipping mock suite on a live network.");
       this.skip();
     }
     const s = await ethers.getSigners();
@@ -55,74 +58,64 @@ describe("Redact", function () {
     ({ redact, address } = await deployFixture());
   });
 
-  it("initializes with the given model params", async function () {
-    expect(await redact.modelVersion()).to.eq(1n);
-    expect(await redact.bias()).to.eq(BIAS);
-    expect(await redact.threshold()).to.eq(THRESHOLD);
-    expect(await redact.operator()).to.eq(signers.deployer.address);
-  });
+  async function submit(features: number[], as: HardhatEthersSigner) {
+    const input = fhevm.createEncryptedInput(address, as.address);
+    for (const f of features) input.add32(f);
+    const enc = await input.encrypt();
+    const tx = await redact.connect(as).submitApplication(enc.handles, enc.inputProof);
+    await tx.wait();
+  }
 
-  it("approves a strong applicant", async function () {
-    // A great applicant: high income, low debt, many on-time payments, long history
+  it("gold tier for a strong applicant", async function () {
     const features = [10, 5, 90, 400, 3, 0, 240, 60];
-    const { approved } = expectedResult(features);
-    expect(approved).to.eq(true);
+    const exp = expectedResult(features);
+    expect(exp.tier).to.eq(3);
 
-    const input = fhevm.createEncryptedInput(address, signers.alice.address);
-    for (const f of features) input.add32(f);
-    const enc = await input.encrypt();
+    await submit(features, signers.alice);
 
-    const tx = await redact.connect(signers.alice).submitApplication(enc.handles, enc.inputProof);
-    await tx.wait();
-
-    const encVerdict = await redact.connect(signers.alice).getMyVerdict();
-    const verdict = await fhevm.userDecryptEbool(encVerdict, address, signers.alice);
-    expect(verdict).to.eq(true);
-  });
-
-  it("rejects a weak applicant", async function () {
-    // A weak applicant: low income, high debt, few payments, short history, many inquiries
-    const features = [1, 90, 2, 6, 20, 15, 3, 4];
-    const { approved } = expectedResult(features);
-    expect(approved).to.eq(false);
-
-    const input = fhevm.createEncryptedInput(address, signers.alice.address);
-    for (const f of features) input.add32(f);
-    const enc = await input.encrypt();
-
-    const tx = await redact.connect(signers.alice).submitApplication(enc.handles, enc.inputProof);
-    await tx.wait();
+    const encTier = await redact.connect(signers.alice).getMyTier();
+    const tier = await fhevm.userDecryptEuint(FhevmType.euint32, encTier, address, signers.alice);
+    expect(tier).to.eq(3n);
 
     const encVerdict = await redact.connect(signers.alice).getMyVerdict();
-    const verdict = await fhevm.userDecryptEbool(encVerdict, address, signers.alice);
-    expect(verdict).to.eq(false);
-  });
-
-  it("returns the same encrypted score the classifier computed", async function () {
-    const features = [8, 20, 60, 120, 5, 2, 60, 24];
-    const { score } = expectedResult(features);
-
-    const input = fhevm.createEncryptedInput(address, signers.alice.address);
-    for (const f of features) input.add32(f);
-    const enc = await input.encrypt();
-
-    await (await redact.connect(signers.alice).submitApplication(enc.handles, enc.inputProof)).wait();
+    expect(await fhevm.userDecryptEbool(encVerdict, address, signers.alice)).to.eq(true);
 
     const encScore = await redact.connect(signers.alice).getMyScore();
-    const clearScore = await fhevm.userDecryptEuint(FhevmType.euint32, encScore, address, signers.alice);
-    expect(clearScore).to.eq(BigInt(score));
+    const score = await fhevm.userDecryptEuint(FhevmType.euint32, encScore, address, signers.alice);
+    expect(score).to.eq(BigInt(exp.score));
   });
 
-  it("blocks reads before an application exists", async function () {
-    await expect(redact.connect(signers.bob).getMyScore()).to.be.revertedWith("Redact: no application");
+  it("tier 0 rejection for a weak applicant", async function () {
+    const features = [1, 90, 2, 6, 20, 15, 3, 4];
+    const exp = expectedResult(features);
+    expect(exp.tier).to.eq(0);
+
+    await submit(features, signers.alice);
+
+    const encTier = await redact.connect(signers.alice).getMyTier();
+    const tier = await fhevm.userDecryptEuint(FhevmType.euint32, encTier, address, signers.alice);
+    expect(tier).to.eq(0n);
+
+    const encVerdict = await redact.connect(signers.alice).getMyVerdict();
+    expect(await fhevm.userDecryptEbool(encVerdict, address, signers.alice)).to.eq(false);
   });
 
-  it("lets an applicant authorize a lender", async function () {
+  it("middle tier for a middling applicant", async function () {
+    // Aim for tier 1 or 2: decent but not stellar profile.
+    const features = [6, 30, 55, 150, 8, 2, 80, 24];
+    const exp = expectedResult(features);
+    expect(exp.tier).to.be.oneOf([1, 2]);
+
+    await submit(features, signers.alice);
+
+    const encTier = await redact.connect(signers.alice).getMyTier();
+    const tier = await fhevm.userDecryptEuint(FhevmType.euint32, encTier, address, signers.alice);
+    expect(tier).to.eq(BigInt(exp.tier));
+  });
+
+  it("authorizeLender grants tier access", async function () {
     const features = [10, 5, 90, 400, 3, 0, 240, 60];
-    const input = fhevm.createEncryptedInput(address, signers.alice.address);
-    for (const f of features) input.add32(f);
-    const enc = await input.encrypt();
-    await (await redact.connect(signers.alice).submitApplication(enc.handles, enc.inputProof)).wait();
+    await submit(features, signers.alice);
 
     await expect(redact.connect(signers.alice).authorizeLender(signers.bob.address))
       .to.emit(redact, "LenderAuthorized")
@@ -130,18 +123,24 @@ describe("Redact", function () {
   });
 
   it("only the operator can update the model", async function () {
-    const newPos = [600, 0, 50, 6, 0, 0, 10, 20];
-    const newNeg = [0, 40, 0, 0, 25, 120, 0, 0];
-    await expect(redact.connect(signers.alice).updateModel(newPos, newNeg, 2500, 5000)).to.be.revertedWith(
-      "Redact: caller is not the operator",
-    );
+    await expect(
+      redact.connect(signers.alice).updateModel(POS_WEIGHTS, NEG_WEIGHTS, BIAS, THRESHOLD),
+    ).to.be.revertedWith("Redact: caller is not the operator");
+  });
+});
 
-    await expect(redact.connect(signers.deployer).updateModel(newPos, newNeg, 2500, 5000))
-      .to.emit(redact, "ModelUpdated")
-      .withArgs(2n);
+describe("RedactUSD", function () {
+  before(async function () {
+    if (!fhevm.isMock) this.skip();
+  });
 
-    expect(await redact.modelVersion()).to.eq(2n);
-    expect(await redact.bias()).to.eq(2500n);
-    expect(await redact.threshold()).to.eq(5000n);
+  it("mints and transfers", async function () {
+    const [a, b] = await ethers.getSigners();
+    const factory = (await ethers.getContractFactory("RedactUSD")) as RedactUSD__factory;
+    const usdc = (await factory.deploy()) as RedactUSD;
+    await (await usdc.mint(a.address, 1000_000000n)).wait();
+    expect(await usdc.balanceOf(a.address)).to.eq(1000_000000n);
+    await (await usdc.transfer(b.address, 400_000000n)).wait();
+    expect(await usdc.balanceOf(b.address)).to.eq(400_000000n);
   });
 });

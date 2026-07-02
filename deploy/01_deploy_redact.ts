@@ -2,36 +2,34 @@ import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 
 /**
- * Placeholder model weights for Day 1 deployment.
+ * Redact v2 deployment.
  *
- * These are handpicked plausible weights that behave like a real logistic
- * regression. They will be replaced on Day 2 with weights trained on the
- * Lending Club public credit dataset. The weight semantics match the feature
- * encoding in contracts/Redact.sol:
+ * Weights are the TRAINED model from scripts/train_weights.py:
+ *   Test AUC 0.8098, accuracy 0.7640, quantized agreement 0.9898.
+ * Deploys as model version 1 of the v2 contracts.
  *
- *   0: annual income tier      (positive contributor)
- *   1: debt-to-income ratio    (negative contributor)
- *   2: on-time payment count   (positive contributor)
- *   3: months of credit history (positive contributor)
- *   4: number of open accounts (small negative when high)
- *   5: recent inquiries        (negative contributor)
- *   6: employment tenure       (positive contributor)
- *   7: wallet age              (positive contributor)
- *
- * All weights are scaled by 1000 (fixed-point). Threshold is also scaled.
+ * Also deploys the rUSDC demo token and funds the lending pool with 1,000,000.
  */
-const POS_WEIGHTS: number[] = [500, 0, 40, 5, 0, 0, 8, 15];
-const NEG_WEIGHTS: number[] = [0, 30, 0, 0, 20, 100, 0, 0];
-const BIAS: number = 2000;
-const THRESHOLD: number = 4000;
-const MAX_LOAN: bigint = 10_000n * 10n ** 6n; // 10,000 with 6 decimals (mimics USDC)
+const POS_WEIGHTS: number[] = [260, 0, 30, 4, 0, 0, 2, 5];
+const NEG_WEIGHTS: number[] = [0, 40, 0, 0, 23, 144, 0, 0];
+const BIAS: number = 10000;
+const THRESHOLD: number = 10839;
+
+const POOL_FUNDING: bigint = 1_000_000n * 10n ** 6n; // 1M rUSDC
 
 const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
-  const { deployments, getNamedAccounts } = hre;
+  const { deployments, getNamedAccounts, ethers } = hre;
   const { deploy, log } = deployments;
   const { deployer } = await getNamedAccounts();
 
-  log(`\n=== Deploying Redact from ${deployer} ===`);
+  log(`\n=== Deploying Redact v2 from ${deployer} ===`);
+
+  const usdc = await deploy("RedactUSD", {
+    from: deployer,
+    args: [],
+    log: true,
+    waitConfirmations: hre.network.name === "sepolia" ? 2 : 1,
+  });
 
   const redact = await deploy("Redact", {
     from: deployer,
@@ -39,24 +37,34 @@ const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
     log: true,
     waitConfirmations: hre.network.name === "sepolia" ? 2 : 1,
   });
-  log(`Redact deployed: ${redact.address}`);
 
   const pool = await deploy("RedactLendingPool", {
     from: deployer,
-    args: [redact.address, MAX_LOAN],
+    args: [redact.address, usdc.address],
     log: true,
     waitConfirmations: hre.network.name === "sepolia" ? 2 : 1,
   });
-  log(`RedactLendingPool deployed: ${pool.address}`);
 
-  log(`\n=== Deployment summary ===`);
-  log(`Redact:            ${redact.address}`);
+  // Fund the pool with rUSDC liquidity.
+  const token = await ethers.getContractAt("RedactUSD", usdc.address);
+  const poolBalance = await token.balanceOf(pool.address);
+  if (poolBalance < POOL_FUNDING) {
+    log(`Funding pool with ${POOL_FUNDING} rUSDC...`);
+    const tx = await token.mint(pool.address, POOL_FUNDING);
+    await tx.wait();
+    log(`Pool funded.`);
+  }
+
+  log(`\n=== Deployment summary (v2) ===`);
+  log(`rUSDC token:       ${usdc.address}`);
+  log(`Redact oracle:     ${redact.address}`);
   log(`RedactLendingPool: ${pool.address}`);
-  log(`Model version:     1 (placeholder weights)`);
-  log(`Max loan per user: ${MAX_LOAN.toString()}`);
-  log(`==========================\n`);
+  log(`Model:             trained weights (AUC 0.81), version 1`);
+  log(`Pool liquidity:    1,000,000 rUSDC`);
+  log(`Tiers:             1=500, 2=1000, 3=2500 rUSDC | 5% interest | 30d term`);
+  log(`================================\n`);
 };
 
 export default func;
-func.id = "deploy_redact";
-func.tags = ["Redact", "RedactLendingPool"];
+func.id = "deploy_redact_v2";
+func.tags = ["RedactV2"];
