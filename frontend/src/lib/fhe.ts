@@ -40,7 +40,10 @@ export async function encryptFeatures(
   }
   const enc = await input.encrypt();
   const toHex = (u8: Uint8Array): `0x${string}` =>
-    ("0x" + Array.from(u8).map((b) => b.toString(16).padStart(2, "0")).join("")) as `0x${string}`;
+    ("0x" +
+      Array.from(u8)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("")) as `0x${string}`;
   return {
     handles: enc.handles.map(toHex),
     inputProof: toHex(enc.inputProof),

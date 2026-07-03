@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BSD-3-Clause-Clear
 pragma solidity ^0.8.24;
 
-import { FHE, ebool, euint32 } from "@fhevm/solidity/lib/FHE.sol";
-import { ZamaEthereumConfig } from "@fhevm/solidity/config/ZamaConfig.sol";
+import {FHE, ebool, euint32} from "@fhevm/solidity/lib/FHE.sol";
+import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 
 interface IRedact {
     function getTierFor(address user) external view returns (euint32);
@@ -100,7 +100,7 @@ contract RedactLendingPool is ZamaEthereumConfig {
         euint32 tier = oracle.getTierFor(msg.sender);
         FHE.makePubliclyDecryptable(tier);
 
-        pending[msg.sender] = PendingLoan({ requestedAt: block.timestamp, tierHandle: tier, exists: true });
+        pending[msg.sender] = PendingLoan({requestedAt: block.timestamp, tierHandle: tier, exists: true});
 
         emit LoanRequested(msg.sender, FHE.toBytes32(tier));
     }
@@ -109,11 +109,7 @@ contract RedactLendingPool is ZamaEthereumConfig {
      * @notice Step 2: verify the KMS decryption proof for the tier and settle.
      *         Reverts on forged cleartexts or proofs.
      */
-    function finalizeLoan(
-        address borrower,
-        bytes memory abiEncodedClearTier,
-        bytes memory decryptionProof
-    ) external {
+    function finalizeLoan(address borrower, bytes memory abiEncodedClearTier, bytes memory decryptionProof) external {
         PendingLoan memory p = pending[borrower];
         require(p.exists, "RedactLending: no pending request");
         delete pending[borrower];
