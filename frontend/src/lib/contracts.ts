@@ -1,8 +1,8 @@
 // v2 deployment addresses. PASTE THE NEW ADDRESSES HERE after running
 // `npx hardhat deploy --network sepolia` (they print in the summary).
-export const REDACT_ADDRESS = "PASTE_REDACT_ADDRESS" as `0x${string}`;
-export const POOL_ADDRESS = "PASTE_POOL_ADDRESS" as `0x${string}`;
-export const USDC_ADDRESS = "PASTE_RUSDC_ADDRESS" as `0x${string}`;
+export const REDACT_ADDRESS = "0xc3f4d0cBA1E1b4813C36a896C16961EFFee180AD" as `0x${string}`;
+export const POOL_ADDRESS = "0x0e4eC1B0158615D6F266C8936198B71b357Ab45a" as `0x${string}`;
+export const USDC_ADDRESS = "0x16107239DE7017a9DFc99dD30d7A7b8e0058fe35" as `0x${string}`;
 
 export const REDACT_ABI = [
   {
@@ -57,6 +57,20 @@ export const REDACT_ABI = [
     stateMutability: "view",
     type: "function",
   },
+  {
+    inputs: [],
+    name: "totalApplications",
+    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [{ internalType: "address", name: "user", type: "address" }],
+    name: "applicationTimestamp",
+    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
 ] as const;
 
 export const POOL_ABI = [
@@ -67,6 +81,15 @@ export const POOL_ABI = [
       { indexed: false, internalType: "bytes32", name: "tierHandle", type: "bytes32" },
     ],
     name: "LoanRequested",
+    type: "event",
+  },
+  {
+    anonymous: false,
+    inputs: [
+      { indexed: true, internalType: "address", name: "borrower", type: "address" },
+      { indexed: false, internalType: "uint256", name: "amount", type: "uint256" },
+    ],
+    name: "LoanRepaid",
     type: "event",
   },
   {
@@ -121,6 +144,20 @@ export const POOL_ABI = [
   {
     inputs: [],
     name: "liquidity",
+    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "totalLoansIssued",
+    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "totalLoansRejected",
     outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
     stateMutability: "view",
     type: "function",
